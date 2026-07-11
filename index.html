@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>4-Wide Combo Trainer</title>
+<style>
+  :root { --bg:#0d0f14; --panel:#161a22; --line:#232936; --txt:#d7dce6; --dim:#7d8595; --gold:#ffd257; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font-family:ui-monospace,'SF Mono',Menlo,monospace; min-height:100vh; display:flex; align-items:center; justify-content:center; overflow:auto; padding:16px; }
+  #app { display:flex; gap:14px; align-items:flex-start; }
+  .side { width:190px; display:flex; flex-direction:column; gap:10px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; }
+  .panel h3 { font-size:11px; letter-spacing:2px; color:var(--dim); margin-bottom:6px; font-weight:600; }
+  #boardWrap { position:relative; }
+  canvas { display:block; }
+  #board { background:#090b0f; border:1px solid var(--line); border-radius:4px; }
+  .stat { display:flex; justify-content:space-between; font-size:13px; padding:2px 0; }
+  .stat b { color:#fff; }
+  #comboFlash { position:absolute; left:50%; top:38%; transform:translateX(-50%); font-size:22px; font-weight:800; color:var(--gold); text-shadow:0 0 14px rgba(255,210,87,.6); pointer-events:none; opacity:0; white-space:nowrap; }
+  #overMsg { position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; gap:8px; background:rgba(9,11,15,.82); border-radius:4px; font-size:15px; text-align:center; }
+  #hintPath { font-size:15px; color:var(--gold); min-height:22px; word-break:break-all; }
+  #hintChain { font-size:11px; color:var(--dim); margin-top:4px; }
+  .keys { font-size:11px; color:var(--dim); line-height:1.7; }
+  .keys b { color:var(--txt); }
+  label { display:flex; justify-content:space-between; align-items:center; font-size:11px; color:var(--dim); padding:3px 0; gap:6px; }
+  input[type=number] { width:52px; background:#0d1017; border:1px solid var(--line); color:var(--txt); border-radius:4px; padding:2px 4px; font-family:inherit; }
+  input[type=checkbox] { accent-color:var(--gold); }
+  button { background:#222a3a; border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:6px 10px; font-family:inherit; font-size:12px; cursor:pointer; width:100%; }
+  button:hover { background:#2b3550; }
+  button.on { background:#4a3b12; border-color:var(--gold); color:var(--gold); }
+  #title { font-size:13px; letter-spacing:1px; color:var(--dim); text-align:center; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="side">
+    <div id="title">4-WIDE TRAINER</div>
+    <div class="panel"><h3>HOLD</h3><canvas id="holdC" width="100" height="52"></canvas></div>
+    <div class="panel"><h3>STATS</h3>
+      <div class="stat"><span>combo</span><b id="sCombo">0</b></div>
+      <div class="stat"><span>best</span><b id="sBest">0</b></div>
+      <div class="stat"><span>pieces</span><b id="sPieces">0</b></div>
+      <div class="stat"><span>clears</span><b id="sClears">0</b></div>
+      <div class="stat"><span>pps</span><b id="sPps">0.00</b></div>
+      <div class="stat"><span>time</span><b id="sTime">0:00</b></div>
+    </div>
+    <div class="panel keys"><h3>KEYS</h3>
+      <b>←/→</b> move &nbsp;<b>↓</b> sonic drop<br>
+      <b>space</b> hard drop<br>
+      <b>↑/x</b> cw &nbsp;<b>z</b> ccw &nbsp;<b>a</b> 180<br>
+      <b>c/shift</b> hold &nbsp;<b>r</b> retry<br>
+      <b>h</b> hint &nbsp;<b>p</b> auto-play
+    </div>
+  </div>
+
+  <div id="boardWrap">
+    <canvas id="board"></canvas>
+    <div id="comboFlash"></div>
+    <div id="overMsg"><div>TOPPED OUT</div><div id="overStats" style="color:var(--dim);font-size:12px"></div><div style="color:var(--dim);font-size:12px">press R</div></div>
+  </div>
+
+  <div class="side">
+    <div class="panel"><h3>NEXT</h3><canvas id="nextC" width="100" height="250"></canvas></div>
+    <div class="panel"><h3>AI HINT</h3>
+      <div id="hintPath">…</div>
+      <div id="hintChain"></div>
+    </div>
+    <div class="panel"><h3>SETTINGS</h3>
+      <label>zoom <input type="range" id="zoom" min="14" max="48" step="2" value="32" style="width:90px"></label>
+      <label>DAS ms <input type="number" id="das" value="100" min="0" max="400"></label>
+      <label>ARR ms <input type="number" id="arr" value="0" min="0" max="100"></label>
+      <label>gravity c/s <input type="number" id="grav" value="0" min="0" max="20" step="0.5"></label>
+      <label>auto ms/pc <input type="number" id="autoMs" value="400" min="60" max="2000" step="20"></label>
+      <label>sound <input type="checkbox" id="sfxOn" checked></label>
+      <label>show hint <input type="checkbox" id="hintOn" checked></label>
+      <label>piece shadow <input type="checkbox" id="ghostOn" checked></label>
+      <label>never-break assist <input type="checkbox" id="assist" checked></label>
+      <div style="height:6px"></div>
+      <button id="autoBtn">▶ auto-play (P)</button>
+      <div style="height:6px"></div>
+      <button id="resetBtn">reset (R)</button>
+    </div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script>
+const E = window.Engine;
+const W = E.W, H = E.H;
+let CELL = +localStorage.getItem('4w_zoom') || 32;
+const PC = { I:'#41c4d9', O:'#e9c832', T:'#b45ac6', S:'#6cc858', Z:'#e5534b', J:'#5468e0', L:'#e08f36', G:'#697082' };
+
+const bC = document.getElementById('board');
+function sizeBoard() { bC.width = W * CELL; bC.height = H * CELL; }
+sizeBoard();
+const bx = bC.getContext('2d');
+const hx = document.getElementById('holdC').getContext('2d');
+const nx = document.getElementById('nextC').getContext('2d');
+
+const $ = id => document.getElementById(id);
+
+let game, hintAction = null, hintSeq = 0, auto = false, lastAuto = 0;
+let flash = { text:'', t:0 };
+
+// ---------- sound ----------
+// real tetr.io sfx auto-used if .ogg files exist in ./sfx/ (combo_1..combo_16,
+// clearline, combobreak, harddrop, hold, topout); otherwise WebAudio synth
+let AC = null;
+function ac() {
+  if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+  return AC;
+}
+const sfxFiles = {}; // name -> Audio | null (missing)
+function playFile(name) {
+  let a = sfxFiles[name];
+  if (a === undefined) {
+    a = new Audio('sfx/' + name + '.ogg');
+    a.addEventListener('error', () => { sfxFiles[name] = null; });
+    sfxFiles[name] = a;
+  }
+  if (!a) return false;
+  const c = a.cloneNode(); c.volume = 0.55;
+  const p = c.play(); if (p) p.catch(() => {});
+  return true;
+}
+function tone(freq, dur, type, vol, delay = 0, slide = 1) {
+  const ctx = ac(), t = ctx.currentTime + delay;
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t);
+  if (slide !== 1) o.frequency.exponentialRampToValueAtTime(freq * slide, t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g); g.connect(ctx.destination);
+  o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind, n = 0) {
+  if (!$('sfxOn').checked) return;
+  try {
+    switch (kind) {
+      case 'combo': { // rising pitch per combo level, tetr.io style
+        if (playFile('combo_' + Math.min(n, 16))) return;
+        const f = 330 * Math.pow(2, Math.min(n, 22) / 12);
+        tone(f, 0.10, 'triangle', 0.30);
+        tone(f * 1.5, 0.14, 'square', 0.10, 0.04);
+        break;
+      }
+      case 'clear':
+        if (playFile('clearline')) return;
+        tone(520, 0.09, 'triangle', 0.25); tone(780, 0.12, 'triangle', 0.15, 0.05);
+        break;
+      case 'break':
+        if (playFile('combobreak')) return;
+        tone(360, 0.18, 'sawtooth', 0.18, 0, 0.5);
+        break;
+      case 'drop':
+        if (playFile('harddrop')) return;
+        tone(150, 0.05, 'square', 0.16, 0, 0.7);
+        break;
+      case 'hold':
+        if (playFile('hold')) return;
+        tone(880, 0.04, 'square', 0.10);
+        break;
+      case 'topout':
+        if (playFile('topout')) return;
+        tone(300, 0.5, 'sawtooth', 0.22, 0, 0.25);
+        break;
+    }
+  } catch (e) {}
+}
+
+function newBag() {
+  const p = ['I','O','T','S','Z','J','L'];
+  for (let i = 6; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [p[i],p[j]] = [p[j],p[i]]; }
+  return p;
+}
+
+function reset() {
+  game = {
+    grid: Array.from({length:H}, () => Array(W).fill(null)),
+    queue: [...newBag(), ...newBag()],
+    cur: null, hold: null, canHold: true,
+    streak: 0, best: 0, pieces: 0, clears: 0,
+    over: false, t0: null,
+  };
+  // 3-cell residue seed — canonical 4-wide steady state
+  for (let x = 0; x < 3; x++) game.grid[H-1][x] = 'G';
+  spawn();
+}
+
+function gridRows() {
+  const rows = new Array(H);
+  for (let y = 0; y < H; y++) { let b = 0; for (let x = 0; x < W; x++) if (game.grid[y][x]) b |= 1 << x; rows[y] = b; }
+  return rows;
+}
+
+// refill queue; in assist mode reshuffle each new bag until one keeps a
+// combo-surviving line alive from the current state through the whole queue
+function refillQueue() {
+  while (game.queue.length < 8) {
+    let bag = newBag();
+    if ($('assist').checked && game.cur) {
+      const pre = E.dpPrefix(gridRows(), game.hold, [game.cur.id, ...game.queue], game.canHold);
+      if (pre) for (let t = 0; t < 60 && !E.dpExtendSurvives(pre, bag); t++) bag = newBag();
+    }
+    game.queue.push(...bag);
+  }
+}
+
+function spawn() {
+  const id = game.queue.shift();
+  game.cur = { id, x:0, y:0, r:0 };
+  game.canHold = true;
+  refillQueue();
+  if (!E.fits(gridRows(), id, 0, 0, 0)) { gameOver(); return; }
+  computeHint();
+}
+
+function gameOver() {
+  game.over = true; hintAction = null;
+  sfx('topout');
+  $('overStats').textContent = `best combo ${Math.max(0, game.best-1)} · ${game.pieces} pieces`;
+  $('overMsg').style.display = 'flex';
+}
+
+function tryMove(dx, dy) {
+  const c = game.cur;
+  if (E.fits(gridRows(), c.id, c.x+dx, c.y+dy, c.r)) { c.x += dx; c.y += dy; lockTimer = 0; return true; }
+  return false;
+}
+function tryRot(dir) {
+  const c = game.cur;
+  const res = E.tryRotate(gridRows(), c.id, c.x, c.y, c.r, dir);
+  if (res) { c.x = res.x; c.y = res.y; c.r = res.r; lockTimer = 0; return true; }
+  return false;
+}
+function sonicDrop() { while (tryMove(0, 1)); }
+
+function lock() {
+  const c = game.cur;
+  const cells = E.cellsOf(c.id, c.x, c.y, c.r);
+  if (cells.some(([,ay]) => ay < 0)) { gameOver(); return; }
+  for (const [ax, ay] of cells) game.grid[ay][ax] = c.id;
+  game.pieces++;
+  if (!game.t0) game.t0 = performance.now();
+  // clear full rows
+  const kept = game.grid.filter(row => row.some(v => !v));
+  const cleared = H - kept.length;
+  while (kept.length < H) kept.unshift(Array(W).fill(null));
+  game.grid = kept;
+  if (cleared > 0) {
+    game.streak++; game.best = Math.max(game.best, game.streak); game.clears += cleared;
+    if (game.streak >= 2) { flash = { text: `${game.streak-1} COMBO`, t: performance.now() }; sfx('combo', game.streak - 1); }
+    else sfx('clear');
+  } else {
+    if (game.streak >= 2) { flash = { text: 'combo lost', t: performance.now() }; sfx('break'); }
+    else sfx('drop');
+    game.streak = 0;
+  }
+  spawn();
+}
+
+function hardDrop() { sonicDrop(); lock(); }
+
+function doHold(recompute = true) {
+  if (!game.canHold || game.over) return;
+  sfx('hold');
+  if (game.hold == null) {
+    game.hold = game.cur.id;
+    const id = game.queue.shift();
+    game.cur = { id, x:0, y:0, r:0 };
+    game.canHold = false;
+    refillQueue();
+    if (!E.fits(gridRows(), id, 0, 0, 0)) { gameOver(); return; }
+  } else {
+    const t = game.hold; game.hold = game.cur.id;
+    game.cur = { id: t, x:0, y:0, r:0 };
+    game.canHold = false;
+    if (!E.fits(gridRows(), t, 0, 0, 0)) { gameOver(); return; }
+  }
+  if (recompute) computeHint();
+}
+
+function computeHint() {
+  const seq = ++hintSeq;
+  hintAction = null;
+  setTimeout(() => {
+    if (seq !== hintSeq || game.over) return;
+    const rows = gridRows();
+    let act = null;
+    if ($('assist').checked) {
+      // exact DP over the whole known queue — follows a proven-surviving line
+      const mv = E.bestSurvivingMove(rows, game.hold, [game.cur.id, ...game.queue], game.canHold);
+      if (mv) {
+        if (mv.holdOnly) act = { holdOnly: true, guaranteed: true, path: [], cells: [] };
+        else act = { ...mv.pl, holdUsed: mv.holdUsed, guaranteed: true };
+      }
+    }
+    if (!act) act = E.searchBest(rows, game.cur.id, game.queue.slice(0, 5), game.hold, game.canHold);
+    if (seq !== hintSeq) return;
+    hintAction = act;
+    updateHintPanel();
+  }, 0);
+}
+
+const TOK = { L:'←', R:'→', CW:'↻', CCW:'↺', F:'180', D:'↓' };
+function updateHintPanel() {
+  if (!hintAction) { $('hintPath').textContent = '…'; $('hintChain').textContent = ''; return; }
+  if (hintAction.holdOnly) {
+    $('hintPath').textContent = 'HOLD (keep piece for later)';
+    $('hintChain').textContent = '✓ combo guaranteed thru known queue';
+    return;
+  }
+  const parts = [];
+  if (hintAction.holdUsed) parts.push('HOLD');
+  parts.push(...hintAction.path.map(t => TOK[t]));
+  parts.push('⤓');
+  $('hintPath').textContent = parts.join(' ');
+  $('hintChain').textContent = hintAction.guaranteed
+    ? '✓ combo guaranteed thru known queue'
+    : hintAction.cleared > 0
+      ? `clears · sees ≥${hintAction.chain} chain ahead`
+      : 'no clear — rebuilding residue';
+}
+
+// ---------- input ----------
+const held = {};
+let dasDir = 0, dasT0 = 0, arrAcc = 0;
+let lockTimer = 0, gravAcc = 0;
+
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const k = e.key;
+  if ([' ','ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(k)) e.preventDefault();
+  if (k === 'r' || k === 'R') { $('overMsg').style.display='none'; reset(); return; }
+  if (k === 'h' || k === 'H') { $('hintOn').checked = !$('hintOn').checked; return; }
+  if (k === 'p' || k === 'P') { toggleAuto(); return; }
+  if (game.over || auto) return;
+  if (k === 'ArrowLeft')  { held.left = true;  dasDir = -1; dasT0 = performance.now(); arrAcc = 0; tryMove(-1,0); }
+  if (k === 'ArrowRight') { held.right = true; dasDir = 1;  dasT0 = performance.now(); arrAcc = 0; tryMove(1,0); }
+  if (k === 'ArrowDown')  { held.soft = true; sonicDrop(); }
+  if (k === ' ') hardDrop();
+  if (k === 'ArrowUp' || k === 'x' || k === 'X') tryRot('CW');
+  if (k === 'z' || k === 'Z') tryRot('CCW');
+  if (k === 'a' || k === 'A') tryRot('F');
+  if (k === 'c' || k === 'C' || k === 'Shift') doHold();
+});
+document.addEventListener('keyup', e => {
+  const k = e.key;
+  if (k === 'ArrowLeft')  { held.left = false;  if (dasDir === -1) switchDas(); }
+  if (k === 'ArrowRight') { held.right = false; if (dasDir === 1) switchDas(); }
+  if (k === 'ArrowDown') held.soft = false;
+});
+function switchDas() {
+  if (held.left) { dasDir = -1; dasT0 = performance.now(); }
+  else if (held.right) { dasDir = 1; dasT0 = performance.now(); }
+  else dasDir = 0;
+}
+
+function toggleAuto() {
+  auto = !auto;
+  $('autoBtn').classList.toggle('on', auto);
+  $('autoBtn').textContent = auto ? '■ auto-play ON (P)' : '▶ auto-play (P)';
+  lastAuto = performance.now();
+}
+$('autoBtn').onclick = toggleAuto;
+$('resetBtn').onclick = () => { $('overMsg').style.display='none'; reset(); };
+$('zoom').value = CELL;
+$('zoom').oninput = () => { CELL = +$('zoom').value; sizeBoard(); localStorage.setItem('4w_zoom', CELL); };
+
+// ---------- main loop ----------
+let lastT = performance.now();
+function frame(now) {
+  const dt = now - lastT; lastT = now;
+
+  if (!game.over) {
+    // DAS/ARR
+    if (dasDir !== 0 && !auto) {
+      const das = +$('das').value, arr = +$('arr').value;
+      if (now - dasT0 > das) {
+        if (arr <= 0) { while (tryMove(dasDir, 0)); }
+        else { arrAcc += dt; while (arrAcc >= arr) { arrAcc -= arr; if (!tryMove(dasDir, 0)) { arrAcc = 0; break; } } }
+      }
+    }
+    // gravity + lock delay
+    const g = +$('grav').value;
+    if (g > 0 && !auto) {
+      gravAcc += g * dt / 1000;
+      while (gravAcc >= 1) { gravAcc -= 1; tryMove(0, 1); }
+      const grounded = !E.fits(gridRows(), game.cur.id, game.cur.x, game.cur.y + 1, game.cur.r);
+      if (grounded) { lockTimer += dt; if (lockTimer > 500) { lockTimer = 0; lock(); } }
+      else lockTimer = 0;
+    }
+    // auto-play
+    if (auto && hintAction && now - lastAuto > +$('autoMs').value) {
+      lastAuto = now;
+      const act = hintAction;
+      if (act.holdOnly) { doHold(); }
+      else {
+        if (act.holdUsed) doHold(false);
+        if (!game.over) {
+          game.cur.x = act.x; game.cur.y = act.y; game.cur.r = act.r;
+          lock();
+        }
+      }
+    }
+  }
+
+  draw(now);
+  updateStats(now);
+  requestAnimationFrame(frame);
+}
+
+function updateStats(now) {
+  $('sCombo').textContent = Math.max(0, game.streak - 1);
+  $('sBest').textContent = Math.max(0, game.best - 1);
+  $('sPieces').textContent = game.pieces;
+  $('sClears').textContent = game.clears;
+  const el = game.t0 ? (now - game.t0) / 1000 : 0;
+  $('sPps').textContent = el > 0 ? (game.pieces / el).toFixed(2) : '0.00';
+  $('sTime').textContent = `${Math.floor(el/60)}:${String(Math.floor(el%60)).padStart(2,'0')}`;
+  const f = $('comboFlash');
+  const age = now - flash.t;
+  if (flash.text && age < 900) {
+    f.textContent = flash.text;
+    f.style.opacity = String(1 - age/900);
+    f.style.top = `${38 - age/90}%`;
+  } else f.style.opacity = '0';
+}
+
+function cellRect(ctx, x, y, color, cell) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x*cell+1, y*cell+1, cell-2, cell-2);
+  ctx.fillStyle = 'rgba(255,255,255,.14)';
+  ctx.fillRect(x*cell+1, y*cell+1, cell-2, 3);
+}
+
+function draw(now) {
+  bx.clearRect(0, 0, bC.width, bC.height);
+  // grid lines
+  bx.strokeStyle = '#161a22'; bx.lineWidth = 1;
+  for (let x = 1; x < W; x++) { bx.beginPath(); bx.moveTo(x*CELL,0); bx.lineTo(x*CELL,H*CELL); bx.stroke(); }
+  for (let y = 1; y < H; y++) { bx.beginPath(); bx.moveTo(0,y*CELL); bx.lineTo(W*CELL,y*CELL); bx.stroke(); }
+  // stack
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    if (game.grid[y][x]) cellRect(bx, x, y, PC[game.grid[y][x]], CELL);
+
+  if (!game.over && game.cur) {
+    const c = game.cur;
+    // player ghost
+    if ($('ghostOn').checked && !auto) {
+      let gy = c.y;
+      while (E.fits(gridRows(), c.id, c.x, gy+1, c.r)) gy++;
+      bx.globalAlpha = 0.22;
+      for (const [ax, ay] of E.cellsOf(c.id, c.x, gy, c.r)) if (ay >= 0) cellRect(bx, ax, ay, PC[c.id], CELL);
+      bx.globalAlpha = 1;
+    }
+    // AI hint shadow
+    if ($('hintOn').checked && hintAction) {
+      const pulse = 0.55 + 0.35 * Math.sin(now / 180);
+      bx.strokeStyle = `rgba(255,210,87,${pulse})`;
+      bx.lineWidth = 2;
+      bx.fillStyle = 'rgba(255,210,87,.10)';
+      for (const [ax, ay] of hintAction.cells) if (ay >= 0) {
+        bx.fillRect(ax*CELL+2, ay*CELL+2, CELL-4, CELL-4);
+        bx.strokeRect(ax*CELL+2, ay*CELL+2, CELL-4, CELL-4);
+      }
+      if (hintAction.holdUsed || hintAction.holdOnly) {
+        bx.fillStyle = `rgba(255,210,87,${pulse})`;
+        bx.font = 'bold 12px ui-monospace';
+        bx.fillText('USE HOLD', 8, 16);
+      }
+    }
+    // current piece
+    for (const [ax, ay] of E.cellsOf(c.id, c.x, c.y, c.r)) if (ay >= 0) cellRect(bx, ax, ay, PC[c.id], CELL);
+  }
+
+  drawMini(hx, 100, 52, game.hold ? [game.hold] : []);
+  drawMini(nx, 100, 250, game.queue.slice(0, 5));
+}
+
+function drawMini(ctx, w, h, ids) {
+  ctx.clearRect(0, 0, w, h);
+  const cell = 16;
+  ids.forEach((id, i) => {
+    const cs = E.SHAPES[id][0];
+    const minX = Math.min(...cs.map(c => c[0])), maxX = Math.max(...cs.map(c => c[0]));
+    const minY = Math.min(...cs.map(c => c[1])), maxY = Math.max(...cs.map(c => c[1]));
+    const ox = (w - (maxX - minX + 1) * cell) / 2 - minX * cell;
+    const oy = i * 48 + (44 - (maxY - minY + 1) * cell) / 2 - minY * cell;
+    for (const [cx, cy] of cs) {
+      ctx.fillStyle = PC[id];
+      ctx.fillRect(ox + cx*cell + 1, oy + cy*cell + 1, cell - 2, cell - 2);
+      ctx.fillStyle = 'rgba(255,255,255,.14)';
+      ctx.fillRect(ox + cx*cell + 1, oy + cy*cell + 1, cell - 2, 2);
+    }
+  });
+}
+
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
