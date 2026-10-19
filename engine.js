@@ -239,8 +239,10 @@
   // states: set of (rows, hold) reachable while clearing a line with EVERY piece
   // of seq in order. `first` carries the move that started each surviving line.
   const DP_CAP = 240;
+  // st.nh: the previous piece was hold-only, so the piece now in hand can't be held again
+  const dpKey = s => hashRows(s.rows) + ';' + (s.hold || '-') + (s.nh ? '!' : '');
   function dpRun(states, seq, canHoldFirst) {
-    let cur = new Map(states.map(s => [hashRows(s.rows) + ';' + (s.hold || '-'), s]));
+    let cur = new Map(states.map(s => [dpKey(s), s]));
     for (let i = 0; i < seq.length; i++) {
       const p = seq[i], next = new Map();
       const allowHold = canHoldFirst || i > 0;
@@ -250,15 +252,15 @@
           const k = pl.rkey + ';' + (st.hold || '-');
           if (!next.has(k)) next.set(k, { rows: pl.rows, hold: st.hold, first: st.first || { holdUsed: false, holdOnly: false, pl } });
         }
-        if (allowHold) {
+        if (allowHold && !st.nh) {
           if (st.hold) {
             for (const pl of getPlacements(st.rows, rkey, st.hold)) if (pl.cleared > 0) {
               const k = pl.rkey + ';' + p;
               if (!next.has(k)) next.set(k, { rows: pl.rows, hold: p, first: st.first || { holdUsed: true, holdOnly: false, pl } });
             }
           } else {
-            const k = rkey + ';' + p; // hold the piece, place nothing (combo unaffected)
-            if (!next.has(k)) next.set(k, { rows: st.rows, hold: p, first: st.first || { holdOnly: true } });
+            const k = rkey + ';' + p + '!'; // hold the piece, place nothing (combo unaffected); next piece can't be held
+            if (!next.has(k)) next.set(k, { rows: st.rows, hold: p, nh: true, first: st.first || { holdOnly: true } });
           }
         }
       }
@@ -268,7 +270,7 @@
         arr.sort((a, b) => getEval(b.rows, hashRows(b.rows)) - getEval(a.rows, hashRows(a.rows)));
         arr = arr.slice(0, DP_CAP);
       }
-      cur = new Map(arr.map(s => [hashRows(s.rows) + ';' + (s.hold || '-'), s]));
+      cur = new Map(arr.map(s => [dpKey(s), s]));
     }
     return [...cur.values()];
   }
@@ -286,7 +288,69 @@
     return best.s.first;
   }
 
-  const E = { W, H, FULL, SHAPES, fits, tryRotate, cellsOf, clearRows, placements, evalBoard, searchBest, comboSurvives, bestSurvivingMove, dpPrefix, dpExtendSurvives };
+  // ---- move audit ----
+  // How many pieces of seq (index 0 = current) does the combo survive from `state`,
+  // having already consumed seq[0..from)? depth === seq.length means survived all.
+  function chainDepth(state, seq, from) {
+    let cur = [state], d = from;
+    while (d < seq.length) {
+      const nxt = dpRun(cur, [seq[d]], true);
+      if (!nxt) break;
+      cur = nxt; d++;
+    }
+    return { depth: d, states: cur };
+  }
+
+  // Judge a played move against every alternative, using only the pieces the player can see.
+  // chosen: { holdUsed, rows: board after lock + clear, cleared }
+  // depth = index in seq of the piece that kills the combo, i.e. how far ahead the player had to look.
+  // traps = depths at which some clearing alternative would have died (the lookahead tests this decision held).
+  function auditMove(rows, holdId, seq, chosen) {
+    const rkey = hashRows(rows);
+    // every legal first move that clears: hold route + placement, with how long the combo then survives
+    const routes = [{ piece: seq[0], hold: holdId || null, used: false, from: 1 }];
+    if (holdId) routes.push({ piece: holdId, hold: seq[0], used: true, from: 1 });
+    else if (seq[1]) routes.push({ piece: seq[1], hold: seq[0], used: true, from: 2 });
+    const opts = new Map();
+    for (const r of routes) {
+      for (const pl of getPlacements(rows, rkey, r.piece)) {
+        if (pl.cleared === 0) continue;
+        const k = pl.rkey + ';' + (r.hold || '-') + ';' + r.from;
+        if (!opts.has(k)) opts.set(k, { holdUsed: r.used, pl, depth: chainDepth({ rows: pl.rows, hold: r.hold, first: null }, seq, r.from).depth });
+      }
+    }
+    let best = null, bestDepth = 0;
+    for (const o of opts.values()) {
+      const e = getEval(o.pl.rows, o.pl.rkey);
+      if (o.depth > bestDepth || (o.depth === bestDepth && best && e > best.e)) { bestDepth = o.depth; best = { ...o, e }; }
+    }
+
+    let depth = 0;
+    if (chosen.cleared > 0) {
+      const from = chosen.holdUsed && !holdId ? 2 : 1;
+      const hold = chosen.holdUsed ? seq[0] : (holdId || null);
+      depth = chainDepth({ rows: chosen.rows, hold, first: null }, seq, from).depth;
+      if (depth > bestDepth) bestDepth = depth; // DP pruning can hide a line; the played move is proof it exists
+    }
+
+    let verdict;
+    if (bestDepth === 0) verdict = 'forced';
+    else if (!chosen.cleared) verdict = 'noclear';
+    else if (depth >= bestDepth) verdict = 'safe';
+    else verdict = 'doomed';
+
+    // depths at which some clearing alternative would have died: the lookahead tests this decision held
+    const traps = new Set([...opts.values()].map(o => o.depth).filter(d => d < bestDepth));
+    if (verdict === 'doomed') traps.add(depth);
+    return {
+      verdict, bestDepth, depth,
+      killer: verdict === 'doomed' ? seq[depth] : null,
+      traps: [...traps].sort((a, b) => a - b),
+      best: best && best.depth === bestDepth ? { holdUsed: best.holdUsed, pl: best.pl } : null,
+    };
+  }
+
+  const E = { W, H, FULL, SHAPES, fits, tryRotate, cellsOf, clearRows, placements, evalBoard, searchBest, comboSurvives, bestSurvivingMove, dpPrefix, dpExtendSurvives, auditMove };
   if (typeof module !== 'undefined' && module.exports) module.exports = E;
   else global.Engine = E;
 })(typeof window !== 'undefined' ? window : globalThis);
