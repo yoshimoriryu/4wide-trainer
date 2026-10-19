@@ -29,7 +29,7 @@
   button:hover { background:#2b3550; }
   button.on { background:#4a3b12; border-color:var(--gold); color:var(--gold); }
   #title { font-size:13px; letter-spacing:1px; color:var(--dim); text-align:center; }
-  #verdict { position:absolute; left:4px; right:4px; bottom:6px; padding:6px 8px; border-radius:6px; font-size:12px; line-height:1.4; background:rgba(9,11,15,.88); border:1px solid var(--line); opacity:0; transition:opacity .25s; pointer-events:none; }
+  #verdict { padding:8px 10px; min-height:64px; border-radius:8px; font-size:12px; line-height:1.4; background:var(--panel); border:1px solid var(--line); opacity:0; transition:opacity .25s; pointer-events:none; }
   #verdict.safe { color:#6cc858; border-color:#2f5a27; }
   #verdict.bad { color:#e5534b; border-color:#6a2a26; }
   #verdict.forced { color:var(--dim); }
@@ -66,12 +66,12 @@
       <b>h</b> hint &nbsp;<b>p</b> auto-play<br>
       <b>u</b> rewind last move (coach)
     </div>
+    <div id="verdict"></div>
   </div>
 
   <div id="boardWrap">
     <canvas id="board"></canvas>
     <div id="comboFlash"></div>
-    <div id="verdict"></div>
     <div id="overMsg"><div>TOPPED OUT</div><div id="overStats" style="color:var(--dim);font-size:12px"></div><div style="color:var(--dim);font-size:12px">press R</div></div>
   </div>
 
