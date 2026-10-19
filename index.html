@@ -32,6 +32,7 @@
   #verdict { padding:8px 10px; min-height:64px; border-radius:8px; font-size:12px; line-height:1.4; background:var(--panel); border:1px solid var(--line); opacity:0; transition:opacity .25s; pointer-events:none; }
   #verdict.safe { color:#6cc858; border-color:#2f5a27; }
   #verdict.bad { color:#e5534b; border-color:#6a2a26; }
+  #verdict.warn { color:var(--gold); border-color:#6b5a1e; }
   #verdict.forced { color:var(--dim); }
   #verdict small { display:block; color:var(--dim); }
   #coachPanel { display:none; }
@@ -243,6 +244,7 @@ function takeSnap() {
     grid: game.grid.map(r => r.slice()), queue: game.queue.slice(), cur: game.cur.id, hold: game.hold,
     streak: game.streak, best: game.best, pieces: game.pieces, clears: game.clears, t0: game.t0,
     rows: gridRows(), seq: [game.cur.id, ...game.queue.slice(0, 5)], // cur + 5 previews: all the player sees
+    p0: E.bagOffset(game.queue.length), // bag position of cur: bounds what the unseen piece can be
     holdUsed: false, tSpawn: performance.now(),
   };
 }
@@ -303,14 +305,14 @@ function gradeMove(snap, placedId, chosen) {
   const hint = $('hintOn').checked && !!hintAction;
   const ms = performance.now() - snap.tSpawn;
   setTimeout(() => {
-    const a = E.auditMove(snap.rows, snap.hold, snap.seq, chosen);
+    const a = E.auditMove(snap.rows, snap.hold, snap.seq, chosen, { p0: snap.p0 });
     showVerdict(a, retry);
     const rebuilding = snap.streak === 0 && snap.pieces > 0; // after a break, decisions aren't combo decisions
-    if (retry || rebuilding || a.verdict === 'forced') return;
+    if (retry || rebuilding || a.verdict === 'forced' || a.verdict === 'deadend') return; // not the player's call
     Stats.add({
       t: Date.now(), piece: placedId, hold: chosen.holdUsed ? 1 : 0,
       res: snap.rows.filter(r => r).map(r => r.toString(16)).join('/'), hid: snap.hold || '-',
-      v: a.verdict, need: a.depth, best: a.bestDepth, killer: a.killer, traps: a.traps,
+      v: a.verdict, need: a.depth, best: a.bestDepth, killer: a.killer, traps: a.traps, ct: a.covTrap ? 1 : 0,
       ms: Math.round(ms), hint: hint ? 1 : 0,
     });
     renderCoach();
@@ -323,20 +325,31 @@ function pathText(b) {
 
 function showVerdict(a, retry) {
   const el = $('verdict');
-  const fix = a.best ? `safe: ${pathText(a.best)} · ` : '';
+  const fix = a.best ? `safer: ${pathText(a.best)} · ` : '';
+  const miss = a.missed.join('/');
   let cls, main, sub = '';
   if (a.verdict === 'safe') {
     cls = 'safe';
     main = '✓ safe';
-    if (a.traps.length) sub = `dodged trap${a.traps.length > 1 ? 's' : ''} at ${a.traps.map(d => '+' + d).join(' ')}`;
+    if (a.nposs && a.cover === a.nposs) sub = 'holds against every possible next piece';
+    else if (a.nposs) sub = `best available · unseen ${miss} would break it`;
+    if (a.traps.length) sub += `${sub ? ' · ' : ''}dodged trap${a.traps.length > 1 ? 's' : ''} at ${a.traps.map(d => '+' + d).join(' ')}`;
+  } else if (a.verdict === 'risky') {
+    cls = 'warn';
+    main = `⚠ risky: unseen ${miss} would break it`;
+    sub = `${fix}survives ${a.bestCover}/${a.nposs} possible next pieces (this: ${a.cover}/${a.nposs}) · U to rewind`;
   } else if (a.verdict === 'doomed') {
     cls = 'bad';
     main = `✗ dooms at +${a.depth}: ${a.killer} can't clear`;
-    sub = `${fix}U to rewind`;
+    sub = `${fix.replace('safer', 'safe')}U to rewind`;
   } else if (a.verdict === 'noclear') {
     cls = 'bad';
     main = '✗ no clear — combo broke';
-    sub = `${fix}U to rewind`;
+    sub = `${fix.replace('safer', 'safe')}U to rewind`;
+  } else if (a.verdict === 'deadend') {
+    cls = 'forced';
+    main = `dead end: every move dies at +${a.bestDepth}`;
+    sub = 'unavoidable with the pieces in view — not scored';
   } else {
     cls = 'forced';
     main = 'forced break — nothing could save it';
@@ -345,7 +358,7 @@ function showVerdict(a, retry) {
   el.innerHTML = main + (retry ? ' <small>(retry — not scored)</small>' : '') + (sub ? `<small>${sub}</small>` : '');
   el.style.opacity = 1;
   clearTimeout(verdictTimer);
-  verdictTimer = setTimeout(() => { el.style.opacity = 0; }, a.verdict === 'safe' ? 1800 : 6000);
+  verdictTimer = setTimeout(() => { el.style.opacity = 0; }, a.verdict === 'safe' ? 2200 : 6000);
 }
 
 // back to the last decision point; the retry is shown but not scored
@@ -386,6 +399,7 @@ function renderCoach() {
       const b = s.byNeed[d] || { opp: 0, err: 0 };
       h += `<div class="bar"><span>+${d}</span><span class="trk"><span class="fill" style="display:block;width:${b.opp ? b.err / b.opp * 100 : 0}%"></span></span><span class="n">${b.err}/${b.opp}</span></div>`;
     }
+    if (s.bag.opp) h += `<div class="mini">unseen-piece traps: <b>${s.bag.err}/${s.bag.opp}</b> risky</div>`;
     if (s.weakPieces.length) h += `<div class="mini">weak pieces: ${s.weakPieces.map(w => `<b>${w.id}</b> ${w.err}/${w.opp}`).join(' · ')}</div>`;
     if (s.killers.length) h += `<div class="mini">combo killers: ${s.killers.map(([id, n]) => `<b>${id}</b>×${n}`).join(' ')}</div>`;
     if (s.avgMsErr != null && s.avgMsSafe != null) h += `<div class="mini">think time: right <b>${(s.avgMsSafe / 1000).toFixed(1)}s</b> · wrong <b>${(s.avgMsErr / 1000).toFixed(1)}s</b></div>`;
@@ -449,6 +463,13 @@ function computeHint() {
         else act = { ...mv.pl, holdUsed: mv.holdUsed, guaranteed: true };
       }
     }
+    if (!act && coachOn()) {
+      // same logic the grader uses: longest survival in view, then most robust to the unseen piece
+      const h = E.coachHint(rows, game.hold, [game.cur.id, ...game.queue.slice(0, 5)], game.canHold, E.bagOffset(game.queue.length));
+      if (h) act = { ...h.pl, holdUsed: h.holdUsed, note: h.depth < h.full
+        ? `dead end ahead: every move dies at +${h.depth}`
+        : h.cover === h.nposs ? '✓ holds against every possible next piece' : `best available · survives ${h.cover}/${h.nposs} possible next pieces` };
+    }
     if (!act) act = E.searchBest(rows, game.cur.id, game.queue.slice(0, 5), game.hold, game.canHold);
     if (seq !== hintSeq) return;
     hintAction = act;
@@ -469,7 +490,8 @@ function updateHintPanel() {
   parts.push(...hintAction.path.map(t => TOK[t]));
   parts.push('⤓');
   $('hintPath').textContent = parts.join(' ');
-  $('hintChain').textContent = hintAction.guaranteed
+  $('hintChain').textContent = hintAction.note ? hintAction.note
+    : hintAction.guaranteed
     ? '✓ combo guaranteed thru known queue'
     : hintAction.cleared > 0
       ? `clears · sees ≥${hintAction.chain} chain ahead`

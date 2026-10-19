@@ -301,56 +301,106 @@
     return { depth: d, states: cur };
   }
 
+  // Which pieces can come right after a visible 7-bag run? p0 = bag offset (0..6) of seq[0].
+  // Bag-mates of the unseen piece that already appeared are ruled out; at the end of a bag it is fully determined.
+  function bagNext(seq, p0) {
+    const ph = (p0 + seq.length) % 7; // bag-mates that came before the unseen piece
+    const seen = new Set(seq.slice(seq.length - ph));
+    return ALL_IDS.filter(id => !seen.has(id));
+  }
+  // bag offset of the piece in hand, given how many pieces are still queued behind it
+  const bagOffset = queueLen => (((7 - queueLen % 7) % 7) + 6) % 7;
+
+  // After surviving the whole view, how many of the possible unseen pieces can ONE line still clear?
+  // (the line is fixed before the piece appears, so it can't adapt to it)
+  const COVER_STATES = 48;
+  function coverOf(states, poss) {
+    const top = states.length > COVER_STATES
+      ? states.slice().sort((a, b) => getEval(b.rows, hashRows(b.rows)) - getEval(a.rows, hashRows(a.rows))).slice(0, COVER_STATES)
+      : states;
+    let best = { n: -1, missed: poss };
+    for (const st of top) {
+      const missed = poss.filter(p => !dpRun([st], [p], true));
+      if (poss.length - missed.length > best.n) best = { n: poss.length - missed.length, missed };
+      if (!missed.length) break;
+    }
+    return best;
+  }
+
   // Judge a played move against every alternative, using only the pieces the player can see.
   // chosen: { holdUsed, rows: board after lock + clear, cleared }
-  // depth = index in seq of the piece that kills the combo, i.e. how far ahead the player had to look.
-  // traps = depths at which some clearing alternative would have died (the lookahead tests this decision held).
-  function auditMove(rows, holdId, seq, chosen) {
-    const rkey = hashRows(rows);
+  // opt: { p0 (bag offset of seq[0]; enables the unseen-piece check), canHold (default true) }
+  //   forced   nothing clears            noclear  dropped without clearing
+  //   doomed   a longer-surviving move existed (depth = how far ahead you had to look)
+  //   deadend  every move dies inside the view: unavoidable, not a mistake
+  //   risky    survives the view, but another move survives more of the possible unseen pieces
+  //   safe     survives the view and is as robust to the unseen piece as any move
+  function auditMove(rows, holdId, seq, chosen, opt = {}) {
+    const rkey = hashRows(rows), full = seq.length;
+    const poss = opt.p0 === undefined ? null : bagNext(seq, opt.p0);
     // every legal first move that clears: hold route + placement, with how long the combo then survives
     const routes = [{ piece: seq[0], hold: holdId || null, used: false, from: 1 }];
-    if (holdId) routes.push({ piece: holdId, hold: seq[0], used: true, from: 1 });
-    else if (seq[1]) routes.push({ piece: seq[1], hold: seq[0], used: true, from: 2 });
+    if (opt.canHold !== false) {
+      if (holdId) routes.push({ piece: holdId, hold: seq[0], used: true, from: 1 });
+      else if (seq[1]) routes.push({ piece: seq[1], hold: seq[0], used: true, from: 2 });
+    }
     const opts = new Map();
     for (const r of routes) {
       for (const pl of getPlacements(rows, rkey, r.piece)) {
         if (pl.cleared === 0) continue;
         const k = pl.rkey + ';' + (r.hold || '-') + ';' + r.from;
-        if (!opts.has(k)) opts.set(k, { holdUsed: r.used, pl, depth: chainDepth({ rows: pl.rows, hold: r.hold, first: null }, seq, r.from).depth });
+        if (opts.has(k)) continue;
+        const ch = chainDepth({ rows: pl.rows, hold: r.hold, first: null }, seq, r.from);
+        const o = { holdUsed: r.used, pl, depth: ch.depth, cover: 0, e: getEval(pl.rows, pl.rkey) };
+        if (poss && ch.depth === full) o.cover = coverOf(ch.states, poss).n;
+        opts.set(k, o);
       }
     }
-    let best = null, bestDepth = 0;
+    let best = null;
     for (const o of opts.values()) {
-      const e = getEval(o.pl.rows, o.pl.rkey);
-      if (o.depth > bestDepth || (o.depth === bestDepth && best && e > best.e)) { bestDepth = o.depth; best = { ...o, e }; }
+      if (!best || o.depth > best.depth || (o.depth === best.depth && (o.cover > best.cover || (o.cover === best.cover && o.e > best.e)))) best = o;
     }
+    let bestDepth = best ? best.depth : 0, bestCover = best ? best.cover : 0;
 
-    let depth = 0;
+    let depth = 0, cover = 0, missed = [];
     if (chosen.cleared > 0) {
       const from = chosen.holdUsed && !holdId ? 2 : 1;
       const hold = chosen.holdUsed ? seq[0] : (holdId || null);
-      depth = chainDepth({ rows: chosen.rows, hold, first: null }, seq, from).depth;
-      if (depth > bestDepth) bestDepth = depth; // DP pruning can hide a line; the played move is proof it exists
+      const ch = chainDepth({ rows: chosen.rows, hold, first: null }, seq, from);
+      depth = ch.depth;
+      if (poss && depth === full) { const c = coverOf(ch.states, poss); cover = c.n; missed = c.missed; }
+      // DP pruning can hide a line; the played move is proof it exists
+      if (depth > bestDepth) { bestDepth = depth; bestCover = cover; best = null; }
+      else if (depth === bestDepth && cover > bestCover) { bestCover = cover; best = null; }
     }
 
     let verdict;
     if (bestDepth === 0) verdict = 'forced';
     else if (!chosen.cleared) verdict = 'noclear';
-    else if (depth >= bestDepth) verdict = 'safe';
-    else verdict = 'doomed';
+    else if (depth < bestDepth) verdict = 'doomed';
+    else if (bestDepth < full) verdict = 'deadend';
+    else if (cover < bestCover) verdict = 'risky';
+    else verdict = 'safe';
 
     // depths at which some clearing alternative would have died: the lookahead tests this decision held
     const traps = new Set([...opts.values()].map(o => o.depth).filter(d => d < bestDepth));
     if (verdict === 'doomed') traps.add(depth);
+    const covTrap = !!poss && [...opts.values()].some(o => o.depth === full && o.cover < bestCover);
     return {
-      verdict, bestDepth, depth,
+      verdict, bestDepth, depth, full, cover, bestCover, missed, covTrap, nposs: poss ? poss.length : 0,
       killer: verdict === 'doomed' ? seq[depth] : null,
       traps: [...traps].sort((a, b) => a - b),
-      best: best && best.depth === bestDepth ? { holdUsed: best.holdUsed, pl: best.pl } : null,
+      best: best ? { holdUsed: best.holdUsed, pl: best.pl } : null,
     };
   }
 
-  const E = { W, H, FULL, SHAPES, fits, tryRotate, cellsOf, clearRows, placements, evalBoard, searchBest, comboSurvives, bestSurvivingMove, dpPrefix, dpExtendSurvives, auditMove };
+  // the move the coach would play: longest survival in view, then most robust to the unseen piece, then board eval
+  function coachHint(rows, holdId, seq, canHold, p0) {
+    const a = auditMove(rows, holdId, seq, { cleared: 0, rows, holdUsed: false }, { canHold, p0 });
+    return a.best ? { ...a.best, depth: a.bestDepth, full: a.full, cover: a.bestCover, nposs: a.nposs } : null;
+  }
+
+  const E = { W, H, FULL, SHAPES, fits, tryRotate, cellsOf, clearRows, placements, evalBoard, searchBest, comboSurvives, bestSurvivingMove, dpPrefix, dpExtendSurvives, auditMove, coachHint, bagNext, bagOffset };
   if (typeof module !== 'undefined' && module.exports) module.exports = E;
   else global.Engine = E;
 })(typeof window !== 'undefined' ? window : globalThis);

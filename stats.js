@@ -1,7 +1,8 @@
 // Coach stats: one record per graded decision, persisted in localStorage.
-// Record: { t, piece, hold, res, v, need, best, killer, traps, ms, hint }
-//   v: safe | doomed | noclear   need: lookahead the move required (doomed only)
+// Record: { t, piece, hold, res, v, need, best, killer, traps, ct, ms, hint }
+//   v: safe | risky | doomed | noclear   need: lookahead the move required (doomed only)
 //   traps: lookahead depths at which an alternative would have doomed the combo
+//   ct: 1 if a move robust to the unseen piece existed alongside a weaker one (risky = picked the weaker)
 (function (global) {
   const KEY = '4w_coach_v1', MAX = 3000;
   const MIN_OPP = 5, TOL = 0.15, MAX_NEED = 5, MIN_NOHINT = 30;
@@ -12,11 +13,12 @@
     const useNoHint = noHint.length >= MIN_NOHINT;
     const rs = useNoHint ? noHint : all;
 
-    const byNeed = {}, byPiece = {}, killers = {};
+    const byNeed = {}, byPiece = {}, killers = {}, bag = { opp: 0, err: 0 };
     let safe = 0, doomed = 0, noclear = 0, msSafe = 0, nSafe = 0, msErr = 0, nErr = 0;
     for (const r of rs) {
       if (r.v === 'noclear') { noclear++; continue; } // dropping without a clear isn't a lookahead miss
       if (r.v === 'safe') safe++; else if (r.v === 'doomed') doomed++;
+      if (r.ct) { bag.opp++; if (r.v === 'risky') bag.err++; }
       if (r.traps.length) {
         const p = byPiece[r.piece] || (byPiece[r.piece] = { opp: 0, err: 0 });
         p.opp++; if (r.v === 'doomed') p.err++;
@@ -46,7 +48,7 @@
 
     return {
       n: rs.length, total: all.length, useNoHint,
-      safe, doomed, noclear, byNeed, horizon, limit, weakPieces,
+      safe, doomed, noclear, byNeed, bag, horizon, limit, weakPieces,
       killers: Object.entries(killers).sort((a, b) => b[1] - a[1]).slice(0, 3),
       avgMsSafe: nSafe ? msSafe / nSafe : null,
       avgMsErr: nErr ? msErr / nErr : null,
