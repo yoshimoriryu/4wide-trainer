@@ -297,7 +297,7 @@ function lock() {
 
 // ---------- coach ----------
 const coachOn = () => $('coachOn').checked;
-let verdictTimer = 0, assistBefore = true;
+let assistBefore = true;
 
 // audit runs off the main flow; the snapshot is captured so the next spawn can't disturb it
 function gradeMove(snap, placedId, chosen) {
@@ -357,8 +357,6 @@ function showVerdict(a, retry) {
   el.className = cls;
   el.innerHTML = main + (retry ? ' <small>(retry — not scored)</small>' : '') + (sub ? `<small>${sub}</small>` : '');
   el.style.opacity = 1;
-  clearTimeout(verdictTimer);
-  verdictTimer = setTimeout(() => { el.style.opacity = 0; }, a.verdict === 'safe' ? 2200 : 6000);
 }
 
 // back to the last decision point; the retry is shown but not scored
